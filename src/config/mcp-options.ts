@@ -14,6 +14,7 @@ import {getCategoryOptions} from './category-options.js';
 import {getBrowserOptions} from './browser-options.js';
 import {puppeteerOptions} from './puppeteer-options.js';
 import {toolOptions} from './tool-options.js';
+import type {FocusEmulationMode} from '../types.js';
 
 export const mcpOptions = {
   ...getCategoryOptions(),
@@ -30,6 +31,21 @@ export const mcpOptions = {
     describe:
       'Require pageId on page-scoped tools and route requests by page ID (useful for concurrent agent sessions). Use --no-page-id-routing to disable.',
     default: true,
+  },
+  focusEmulation: {
+    type: 'string',
+    default: 'all',
+    describe:
+      'Controls DevTools focus emulation. "all" (default) emulates a focused page on every page the server initializes, which keeps background tabs alive but forces page fullscreen into "fullscreen within tab" (browser controls stay visible) on those tabs. "selected" emulates only the currently selected page. "off" disables focus emulation entirely.',
+    choices: ['all', 'selected', 'off'] as const,
+    coerce: (value: string): FocusEmulationMode => {
+      if (value !== 'all' && value !== 'selected' && value !== 'off') {
+        throw new Error(
+          `Invalid focusEmulation "${value}". Expected "all", "selected" or "off".`,
+        );
+      }
+      return value;
+    },
   },
   devtoolsComments: {
     type: 'boolean',

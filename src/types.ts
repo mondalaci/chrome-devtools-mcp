@@ -34,6 +34,14 @@ export interface EmulationSettings {
 
 export type Logger = ((...args: unknown[]) => void) | undefined;
 
+// Controls DevTools focus emulation (Emulation.setFocusEmulationEnabled).
+// - 'all' (default): emulate a focused page on every page the server
+//   initializes. Keeps background tabs alive/focused, but forces page
+//   fullscreen into "fullscreen within tab" on those tabs.
+// - 'selected': emulate only the currently selected page.
+// - 'off': never emulate.
+export type FocusEmulationMode = 'all' | 'selected' | 'off';
+
 export interface PaginationOptions {
   pageSize?: number;
   pageIdx?: number;

@@ -40,6 +40,7 @@ import type {
 } from './tools/ToolDefinition.js';
 import type {
   EmulationSettings,
+  FocusEmulationMode,
   GeolocationOptions,
   TextSnapshotNode,
 } from './types.js';
@@ -163,6 +164,10 @@ export class McpPage implements ContextPage {
   #sourceMaps: boolean;
   #commentBridge?: DevToolsCommentBridge;
   #onNotification?: (message: string) => void;
+  // Focus emulation policy and applied state. See setFocusEmulation().
+  #focusEmulationMode: FocusEmulationMode;
+  #focusEmulationRequested: boolean | undefined;
+  #focusEmulationOn = false;
 
   constructor(
     target: Target,
@@ -174,6 +179,7 @@ export class McpPage implements ContextPage {
       navigationTimeout?: number;
       sourceMaps?: boolean;
       onNotification?: (message: string) => void;
+      focusEmulation?: FocusEmulationMode;
     },
   ) {
     this.#hasNetworkBlockOrAllowlist = options.hasNetworkBlockOrAllowlist;
@@ -181,6 +187,7 @@ export class McpPage implements ContextPage {
     this.#navigationTimeout = options.navigationTimeout ?? NAVIGATION_TIMEOUT;
     this.#sourceMaps = options.sourceMaps ?? true;
     this.#onNotification = options.onNotification;
+    this.#focusEmulationMode = options.focusEmulation ?? 'all';
     this.target = target;
     this.id = id;
     this.isolatedContextName = options.isolatedContextName;
@@ -305,10 +312,52 @@ export class McpPage implements ContextPage {
   }
 
   async #initFocusEmulationNoThrow(): Promise<void> {
-    // We emulate a focused page for all pages to support multi-agent workflows.
-    void this.pptrPage.emulateFocusedPage(true).catch(error => {
-      logger?.('Error turning on focused page emulation', error);
-    });
+    // 'all' emulates a focused page on every page the server initializes,
+    // which keeps background tabs alive/focused (useful for multi-agent
+    // workflows and for driving a tab the user is not looking at). 'selected'
+    // defers to McpContext.selectPage() so only the currently selected page is
+    // affected; 'off' never enables focus emulation.
+    const enabled =
+      this.#focusEmulationMode === 'all'
+        ? true
+        : this.#focusEmulationMode === 'selected'
+          ? (this.#focusEmulationRequested ?? false)
+          : false;
+    if (enabled) {
+      await this.setFocusEmulation(true);
+    }
+  }
+
+  /**
+   * Enables or disables DevTools focus emulation for this page.
+   *
+   * Focus emulation makes the page report itself focused and visible even when
+   * its tab is not active, so automation on a background tab keeps working.
+   * The same mechanism makes Chrome treat the page as visibly captured, which
+   * forces page fullscreen into "fullscreen within tab" (the browser window
+   * stays windowed and the browser controls remain visible).
+   *
+   * Safe to call before init(): a request made before the Puppeteer page is
+   * available is applied once init() completes.
+   */
+  async setFocusEmulation(enabled: boolean): Promise<void> {
+    if (this.#focusEmulationMode === 'off') {
+      return;
+    }
+    this.#focusEmulationRequested = enabled;
+    const page = this.#pptrPage;
+    if (!page || this.#disposed) {
+      return;
+    }
+    if (this.#focusEmulationOn === enabled) {
+      return;
+    }
+    try {
+      await page.emulateFocusedPage(enabled);
+      this.#focusEmulationOn = enabled;
+    } catch (error) {
+      logger?.('Error toggling focused page emulation', error);
+    }
   }
 
   async #initDevToolsUniverseNoThrow(): Promise<void> {
@@ -615,6 +664,11 @@ export class McpPage implements ContextPage {
 
   dispose(): void {
     this.#disposed = true;
+    if (this.#focusEmulationOn && this.#pptrPage) {
+      // Best-effort release so the page is no longer treated as captured.
+      this.#focusEmulationOn = false;
+      void this.#pptrPage.emulateFocusedPage(false).catch(() => {});
+    }
     this.#commentBridge?.dispose();
     this.#commentBridge = undefined;
     this.#pptrPage?.off('dialog', this.#dialogHandler);

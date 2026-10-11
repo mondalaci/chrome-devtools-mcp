@@ -46,7 +46,7 @@ import type {
   SupportedExtensions,
 } from './tools/ToolDefinition.js';
 import type {TraceResult} from './processors/PerformanceTrace.js';
-import type {Logger} from './types.js';
+import type {FocusEmulationMode, Logger} from './types.js';
 import {McpWorker} from './McpWorker.js';
 import {getTempFilePath, resolveCanonicalPath} from './utils/files.js';
 import {escapeForLog} from './utils/logger.js';
@@ -77,6 +77,9 @@ interface McpContextOptions {
   categoryExtensions?: boolean;
   // Callback when a notification should be emitted to MCP client.
   onNotification?: (message: string) => void;
+  // Focus emulation policy. 'all' (default) emulates focus on every page the
+  // server initializes; 'selected' only on the selected page; 'off' never.
+  focusEmulation?: FocusEmulationMode;
 }
 
 // Page ids are handed out from a process-wide counter so they stay unique
@@ -490,14 +493,25 @@ export class McpContext implements Context {
   }
 
   selectPage(newPage: McpPage): void {
+    const previous = this.#selectedPage;
     if (
-      this.#selectedPage &&
-      this.#selectedPage !== newPage &&
-      !this.#mcpPages.has(this.#selectedPage.target)
+      previous &&
+      previous !== newPage &&
+      !this.#mcpPages.has(previous.target)
     ) {
-      this.#selectedPage.dispose();
+      previous.dispose();
     }
     this.#selectedPage = newPage;
+    if (this.#options.focusEmulation === 'selected') {
+      // In 'selected' mode only the page the agent is driving keeps focus
+      // emulation; other tabs (e.g. the user's) are released so they can go
+      // real fullscreen. A request made before the page is initialized is
+      // applied once it initializes (see McpPage#initFocusEmulationNoThrow).
+      if (previous && previous !== newPage) {
+        void previous.setFocusEmulation(false);
+      }
+      void newPage.setFocusEmulation(true);
+    }
     newPage.updateTimeouts();
   }
 
@@ -583,6 +597,7 @@ export class McpContext implements Context {
         navigationTimeout: this.#options.navigationTimeout,
         sourceMaps: this.#options.sourceMaps,
         onNotification: this.#options.onNotification,
+        focusEmulation: this.#options.focusEmulation,
       });
     }
     this.#mcpPages.set(target, mcpPage);
